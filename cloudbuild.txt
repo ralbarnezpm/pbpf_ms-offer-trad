@@ -1,0 +1,8 @@
+gcloud auth configure-docker
+
+docker build -t gcr.io/promobooster-pf-dev/pbpf-moffer-api:v1.0.1 .
+
+docker push gcr.io/promobooster-pf-dev/pbpf-moffer-api:v1.0.1
+
+
+gcloud run deploy --image gcr.io/promobooster-pf-dev/pbpf-moffer-api:v1.0.0 --update-env-vars LANG=es_ES.UTF-8,LANGUAGE=es_ES:es,LC_ALL=es_ES.UTF-8

@@ -1,0 +1,25 @@
+from ..extensions import db
+
+class Promotion(db.Model):
+    __tablename__ = 'pb_promotion'
+    id = db.Column(db.BigInteger, primary_key = True)
+    promotion_type_id = db.Column(db.Integer)
+    channel_id = db.Column(db.Integer)
+    promotional_state_id = db.Column(db.Integer)
+    created_by = db.Column(db.Integer)
+    distributors_id = db.Column(db.String)
+    distributors_name = db.Column(db.String)
+    promotion_name = db.Column(db.String)
+    brand_id = db.Column(db.Integer)
+    promotion_description = db.Column(db.String)
+    month_num = db.Column(db.Integer)
+    month_str = db.Column(db.String)
+    year_str = db.Column(db.String)
+    year_month_str = db.Column(db.String)
+    year_month01_str = db.Column(db.String)
+    start_sellin = db.Column(db.DateTime)
+    end_sellin = db.Column(db.DateTime)
+    start_sellout = db.Column(db.DateTime)
+    end_sellout = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime)
