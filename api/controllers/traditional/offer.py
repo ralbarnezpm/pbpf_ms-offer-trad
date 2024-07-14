@@ -85,7 +85,7 @@ def pull_customer_products(promotion_id):
                 max(p.avg_weight) as avg_weight,
                 max(p.units_x_product) as units_x_product,
                 p.brand_code,
-                -- oficina AS office,
+                oficina AS office,
                 tipo_estrategia AS strategy_type,
                 nombre_estrategia AS strategy_name,
                 avg(volumen_estrategico) AS strategic_volume,
@@ -102,14 +102,16 @@ def pull_customer_products(promotion_id):
                 avg(kilos) AS kilos,
                 avg(oc_pesos_kilos) AS oc_pesos_kilos,
                 avg(oc_adim_venta) AS oc_adim_sale,
-                avg(pc) AS critical_price
+                avg(pc) AS critical_price,
+                case when max(o.sin_modelo)=0 then 1 else 0 end as model,
+                p.subfamily
                 -- ,CASE WHEN pp.id IS NULL then 0 ELSE 1 END AS 'on_offer'
             FROM oferta_tradicional_base o
             LEFT JOIN pb_product_list p ON o.codigo_producto=p.code_product
             LEFT JOIN (SELECT id, product_code FROM pb_promotion_product WHERE promotion_id={promotion_id}) pp ON o.codigo_producto=pp.product_code
             WHERE oficina IN ({distributors_name}) AND 
                 o.id_pb not in (SELECT product_id FROM pb_promotion_product WHERE promotion_id={promotion_id})
-            GROUP BY o.codigo_producto, o.tipo_estrategia, o.nombre_estrategia;"""
+            GROUP BY o.codigo_producto, o.tipo_estrategia, o.nombre_estrategia, o.oficina;"""
     df=pull_dataframe_from_sql(q)
     print(q)
     return df, distributors_name
@@ -138,21 +140,74 @@ def umd_to_kg_price(price_key, brand_code, row):
         kg_price=row[price_key]
     return kg_price
 
+def product_percent_ro(row, price_key='strategic_price'):
+    strategic_price_kg = umd_to_kg_price(price_key, row['brand_code'], row)
+    
+    try:
+        strategic_ro = (strategic_price_kg - row['direct_cost'] - row['oc_pesos_kilos'] - (row['oc_adim_sale'] * strategic_price_kg)) / strategic_price_kg
+    except ZeroDivisionError:
+        strategic_ro = 0
+    
+    return strategic_ro
+
+
 def product_view_strategic_ro(row):
     strategic_price_kg = umd_to_kg_price('strategic_price', row['brand_code'], row)
     try:
         strategic_ro = (strategic_price_kg - row['direct_cost'] - row['oc_pesos_kilos'] - (row['oc_adim_sale']*strategic_price_kg)) / strategic_price_kg
     except ZeroDivisionError:
         strategic_ro = 0
-    row['strategic_ro'] = format_number(strategic_ro*100, 1)
+    row['tltp_strategic_ro'] = format_number(strategic_ro*100, 1)
     return row
+
+def product_strategic_ro_price_kg(row):
+    strategic_price_kg = umd_to_kg_price('strategic_price', row['brand_code'], row)
+    try:
+        strategic_ro = (strategic_price_kg - row['direct_cost'] - row['oc_pesos_kilos'] - (row['oc_adim_sale']*strategic_price_kg))
+    except ZeroDivisionError:
+        strategic_ro = 0
+    row['strategic_ro_price_kg'] = format_number(strategic_ro, 0)
+    return row
+
+def pull_aggregated_product_rows(df):
+    # Calcular el precio estratégico ponderado por cada product_code y strategy_type
+    grouped = df.groupby(['product_code', 'strategy_type']).apply(lambda x: pd.Series({
+        'strategic_price': (x['strategic_price'] * x['strategic_volume']).sum() / x['strategic_volume'].sum(),
+        'strategic_volume': x['strategic_volume'].sum()/1000.0,
+        'direct_cost': x['direct_cost'].mean(),
+        'tltp_strategy_name': x['strategy_name'].iloc[0],
+        'model': x.loc[x['strategic_price'].idxmax(), 'model'],
+        'description': x['description'].iloc[0],
+        'subcategory_name': x['subcategory_name'].iloc[0],
+        'subfamily': x['subfamily'].iloc[0],
+        'short_brand': x['short_brand'].iloc[0],
+        'oc_pesos_kilos': x['oc_pesos_kilos'].mean(),
+        'oc_adim_sale': x['oc_adim_sale'].mean(),
+        'brand_code': x['brand_code'].iloc[0],
+        'units_x_product': x['units_x_product'].iloc[0],
+        'avg_weight': x['avg_weight'].iloc[0],
+        'oc_pesos': x['avg_weight'].mean(),
+        'offer_product_id': x['offer_product_id'].iloc[0],
+    }))
+    
+    # Calcular strat_margin
+    grouped['strategic_margin'] = grouped['strategic_price'] - grouped['direct_cost']
+    grouped['tltp_strategic_mg'] = (grouped['strategic_margin'] / grouped['strategic_price']) * 100
+    
+    grouped = grouped.apply(product_strategic_ro_price_kg, axis=1)
+    grouped = grouped.apply(product_view_strategic_ro, axis=1)
+
+    return grouped
+
 
 def pull_products(promotion_id):
     df, distributors_name = pull_customer_products(promotion_id)
+    print(df.columns)
 
-    df=df.apply(product_view_strategic_ro, axis=1)
-    #df=df.apply(product_view_critical_price, axis=1)
-    df=df.apply(product_view_discount, axis=1)
+    # df=df.apply(product_view_strategic_ro, axis=1)
+    # #df=df.apply(product_view_critical_price, axis=1)
+    # df=df.apply(product_view_discount, axis=1)
+    df = pull_aggregated_product_rows(df)
 
     # df_oncatalog=prods_on_catalog(promotion_id, distributors_name)
     # df=pd.merge(df, df_oncatalog[['product_code', 'on_catalog']], on='product_code', how='left')
@@ -160,18 +215,18 @@ def pull_products(promotion_id):
     df_oncatalog_onoffer = pull_products_on_catalog_offer(promotion_id)
     df=pd.merge(df, df_oncatalog_onoffer, on='product_code', how='left')
 
-    cols_round_0 = ["base_price", "current_price", "direct_cost", "critical_price", "strategic_price", "oc_pesos", "sale", "oc_adim", "kilos"]
+    cols_round_0 = ["direct_cost", "strategic_price", "oc_pesos"]
     df[cols_round_0] = df[cols_round_0].applymap(lambda x: format_number(x, 0))
-    cols_round_1 = ["current_volume", "strategic_volume", "elasticity", "oc_pesos_kilos", "oc_adim_sale"]
+    cols_round_1 = ["strategic_volume", "oc_pesos_kilos", "oc_adim_sale", "tltp_strategic_mg"]
     df[cols_round_1] = df[cols_round_1].applymap(lambda x: format_number(x, 1))
 
-    df['category_id']=df['category_id'].fillna(-1).astype(int)
-    df['subcategory_id']=df['subcategory_id'].fillna(-1).astype(int)
+    # df['category_id']=df['category_id'].fillna(-1).astype(int)
+    # df['subcategory_id']=df['subcategory_id'].fillna(-1).astype(int)
     df['brand_code']=df['brand_code'].fillna(-1).astype(int)
     df['on_catalog']=df['on_catalog'].fillna(-1).astype(int)
     df['on_offer']=df['on_offer'].fillna(-1).astype(int)
 
-    
+    df["strategic_volume"] = df.apply(lambda x: f"{x.get('strategic_volume')} Ton." if x["brand_code"] <= 6 else f"{x.get('strategic_volume')} Mil U.", axis=1)
 
     json_data_pandas = df.to_json(orient='records')
     json_data_python = loads(json_data_pandas)
@@ -517,9 +572,13 @@ def pull_offer_family_products(offer_id):
                     pl.active,
                     pl.distributor_name,
 
-                    pl.strategic_volume_kg AS tooltip_strat_vol_kg
+                    pl.strategic_volume_kg AS tooltip_strat_vol_kg,
+
+                    ppl.category_name,
+                    ppl.subcategory_name 
                 FROM pb_promotion_product pl
                 JOIN pb_promotion p ON pl.promotion_id=p.id
+                join pb_product_list ppl on pl.product_code =ppl.code_product 
                 WHERE pl.promotion_id={offer_id};"""
     df = pull_dataframe_from_sql(query)
     df["type"] = "offer"
@@ -692,6 +751,88 @@ def pull_data_rows_v2(products_dataframe):
         product_json['product_rows'] = loads(product_dataframe)
 
     return grouped_products_json
+
+def pull_data_rows_v3(products_dataframe):
+    grouped = products_dataframe.groupby(['product_code', 'strategy_name']).apply(lambda x: pd.Series({       
+        #volume
+        '__curr_vol': x['__curr_vol'].sum(),
+        '__opt_vol': x['__opt_vol'].sum(),
+        '__strat_vol': x['__strat_vol'].sum(),
+        '__strat_io_vol': x['__strat_vol'].sum(),
+        
+        #price
+        '__curr_price': (x['__curr_price'] * x['__curr_vol']).sum() / x['__curr_vol'].sum(),
+        '__opt_price': (x['__opt_price'] * x['__opt_vol']).sum() / x['__opt_vol'].sum(),
+        '__strat_price': (x['__strat_price'] * x['__strat_vol']).sum() / x['__strat_vol'].sum(),
+        '__strat_curr': 0,
+        
+        '__elasticity': x['__elasticity'].mean(),
+        '__pvp_margin': x['__pvp_margin'].mean(),
+
+        #constants
+        'active_offices': x['active_office'].sum(),
+        'offices_count': x.shape[0],
+
+        'direct_cost': x['direct_cost'].mean(),
+        # 'strategy_name': x['strategy_name'].iloc[0],
+        'model': x.loc[x['__strat_price'].idxmax(), 'model'],
+        'product_description': x['product_description'].iloc[0],
+        'category_name': x['category_name'].iloc[0],
+        'subcategory_name': x['subcategory_name'].iloc[0],
+        'subfamily': x['subfamily'].iloc[0],
+        'brand': x['brand'].iloc[0],
+        'oc_pesos_kilos': x['oc_pesos_kilos'].mean(),
+        'oc_adim_sale': x['oc_adim_sale'].mean(),
+        'brand_code': x['brand_code'].iloc[0],
+        'units_x_product': x['units_x_product'].iloc[0],
+        'avg_weight': x['avg_weight'].iloc[0],
+    }))
+    grouped['__strat_curr'] = grouped['__strat_price'] / grouped['__curr_price'] - 1
+
+
+    # margins
+    grouped['curr_mg'] = grouped['__curr_price'] - grouped['direct_cost']
+    grouped['opt_mg'] = grouped['__opt_price'] - grouped['direct_cost']
+    grouped['strat_mg'] = grouped['__strat_price'] - grouped['direct_cost']
+
+    #expected result
+    # grouped = grouped.apply(product_strategic_ro_price_kg, axis=1)
+    # grouped = grouped.rename(columns={"tltp_strategic_ro": "strat_ro"})
+    grouped["__uplift"] = 0.1
+    grouped['__strat_ro'] = grouped.apply(lambda row: product_percent_ro(row, price_key='__strat_price'), axis=1)
+    grouped['__curr_ro'] = grouped.apply(lambda row: product_percent_ro(row, price_key='__curr_price'), axis=1)
+    grouped['__incr_ro'] = grouped['__strat_ro'] - grouped['__curr_ro']
+    grouped['__recommended_pvp'] = 1.19*grouped["__strat_price"]/(1-grouped["__pvp_margin"])
+    
+    #tooltips
+    grouped['tltp_strategic_mg'] = (grouped['strat_mg'] / grouped['__strat_price']) * 100
+    #.......
+
+    #format
+    grouped['curr_vol'] = grouped.apply(lambda x: format_number(x["__curr_vol"]/1000.0, 1, x["brand_code"]), axis=1)
+    grouped['opt_vol'] = grouped.apply(lambda x: format_number(x["__opt_vol"]/1000.0, 1, x["brand_code"]), axis=1)
+    grouped['strat_vol'] = grouped.apply(lambda x: format_number(x["__strat_vol"]/1000.0, 1, x["brand_code"]), axis=1)
+    grouped['strat_io_vol'] = grouped.apply(lambda x: format_number(x["__strat_io_vol"]/1000.0, 1, x["brand_code"]), axis=1)
+
+    grouped['curr_price'] = grouped.apply(lambda x: format_number(x["__curr_price"], 0), axis=1)
+    grouped['opt_price'] = grouped.apply(lambda x: format_number(x["__opt_price"], 0), axis=1)
+    grouped['strat_price'] = grouped.apply(lambda x: format_number(x["__strat_price"], 0), axis=1)
+    grouped['strat_curr'] = grouped.apply(lambda x: format_number(x["__strat_curr"], 1), axis=1)
+
+    grouped['curr_mg'] = grouped.apply(lambda x: format_number(x["curr_mg"], 0), axis=1)
+    grouped['opt_mg'] = grouped.apply(lambda x: format_number(x["opt_mg"], 0), axis=1)
+    grouped['strat_mg'] = grouped.apply(lambda x: format_number(x["strat_mg"], 0), axis=1)
+
+    grouped['curr_ro'] = grouped.apply(lambda x: format_number(x["__curr_ro"], 1), axis=1)
+    grouped['strat_ro'] = grouped.apply(lambda x: format_number(x["__strat_ro"], 1), axis=1)
+    grouped['incr_ro'] = grouped.apply(lambda x: format_number(x["__incr_ro"], 1), axis=1)
+    grouped['recommended_pvp'] = grouped.apply(lambda x: format_number(x["__recommended_pvp"], 0), axis=1)
+    grouped['elasticity'] = grouped.apply(lambda x: format_number(x["__elasticity"], 1), axis=1)
+    grouped['uplift'] = grouped.apply(lambda x: format_number(x["__uplift"]/1000, 1, x["brand_code"]), axis=1)
+
+    return loads(grouped.to_json(orient='records'))
+    
+
 
 def pull_data_rows(grouped_products_json, products_dataframe):
     for product_json in grouped_products_json:
@@ -989,6 +1130,8 @@ def pull_product_view(offer_id):
 
     # data_rows = pull_data_rows(grouped_products_json, df_result)
     data_rows = pull_data_rows_v2(df_result)
+
+    data_rows2 = pull_data_rows_v3(df_result)
     
     #data_summary = pull_data_summary(df_result)
 
@@ -1003,6 +1146,7 @@ def pull_product_view(offer_id):
         #"grouped_data": loads(df_result_grouped),
         "summary": summary,
         "grouped_rows": grouped_rows,
+        "data_rows2": data_rows2
     }   
 
 
@@ -1175,7 +1319,7 @@ def pull_product_optimization_view(product_code, customer, offer_id):
 def parse_save_dict(d):
     product={
         'strategic_price': d["__strat_price"],
-        'customer_margin': d["__customer_margin"],
+        'customer_margin': d["__pvp_margin"],
         'tooltip_strategic_pxu': d["__tooltip_strategic_pxu"],
         'tooltip_strategic_sp': d["__tooltip_strategic_sp"],
         'strategic_volume_kg': d["__tooltip_strat_vol_kg"],
@@ -1183,6 +1327,7 @@ def parse_save_dict(d):
         'promotional_variables_json': dumps(d['promotional_variables_json']),
         'eb_variation': d["__var_eb"],
         'ob_variation': d["__var_ob"],
+        'active': d['active_ofice'],
         'recommended_pvp': d["__recommended_pvp"],
         'id': d["id"],
     }
