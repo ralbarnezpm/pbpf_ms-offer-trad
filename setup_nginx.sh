@@ -41,10 +41,10 @@ server {
 
 server {
     listen 443 ssl;
-    server_name pbpf-traditional-offer-service.pricemaker.io ;
+    server_name pbpf-traditional-offer-service.pricemaker.io;
 
-    ssl_certificate /etc/letsencrypt/live/pbpf-traditional-offer-service.pricemaker.io /fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/pbpf-traditional-offer-service.pricemaker.io /privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/pbpf-traditional-offer-service.pricemaker.io/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pbpf-traditional-offer-service.pricemaker.io/privkey.pem;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -52,7 +52,7 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        
+
         # Aumentar los tiempos de espera a 2 minutos
         proxy_read_timeout 240s;
         proxy_connect_timeout 240s;
