@@ -13,8 +13,8 @@ def format_number(number, decimals, brand_code=None):
         return formatted_number
     except Exception as e:
         print(e)
-        return pd.NaT
-        return ""
+        # return pd.NaT
+        return "-"
 
 def to_number_format(number, decimals):
     try:

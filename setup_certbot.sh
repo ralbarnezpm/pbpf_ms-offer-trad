@@ -4,7 +4,7 @@
 set -e
 
 # Variables
-DOMAIN="pbstd-soprole-service.pricemaker.io"
+DOMAIN="pbpf-traditional-offer-service.pricemaker.io "
 EMAIL="rolandoalbarnez@pricemaker.io"
 
 # Generar el certificado SSL con Certbot

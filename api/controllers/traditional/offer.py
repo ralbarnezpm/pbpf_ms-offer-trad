@@ -346,7 +346,8 @@ def insert_statetment(offer_id, product_codes):
                         elasticity,
                         strategic_volume_kg,
                         distributor_name,
-                        active
+                        active,
+                        direct_cost
                     )
                     SELECT
                         {offer_id} AS promotion_id,
@@ -395,7 +396,8 @@ def insert_statetment(offer_id, product_codes):
                         o.elasticidad AS elasticity,
                         o.volumen_estrategico_kg AS strategic_volume_kg,
                         o.oficina AS distributor_name,
-                        1 as active
+                        1 as active,
+                        o.costo_directo AS direct_cost
                     FROM
                         oferta_tradicional_base o
                     JOIN
@@ -449,7 +451,8 @@ def insert_statetment(offer_id, product_codes):
                         elasticity = VALUES(elasticity),
                         strategic_volume_kg = VALUES(strategic_volume_kg),
                         distributor_name = VALUES(distributor_name),
-                        active = VALUES(active);"""
+                        active = VALUES(active)
+                        direct_cost = VALUES(direct_cost);"""
         err=query_execute_w_err(query)
         print(query)
         # print(query)
@@ -623,6 +626,23 @@ def pull_ro_curr_price(row):
 
 def pull_family_products_header(df):
     df_data_header=df[df["type"] == "offer"]
+    if df_data_header.empty:
+        empty_data = {
+            'curr_vol': '-',
+            'opt_vol': '-',
+            'strat_vol': '-',
+            'curr_price': '-',
+            'opt_price': '-',
+            'strat_price': '-',
+            'opt_ro_mm': '-',
+            'curr_ro_mm': '-',
+            'strat_ro_mm': '-',
+            'strat_act_benefit': '-',
+            'opt_act_benefit': '-',
+            'pvp_margin': '-'
+        }
+        return empty_data
+
     index = df_data_header['brand_code'].first_valid_index()
     brand_code = df_data_header.loc[index, 'brand_code']
     # format_number(x['curr_vol'], 1, x['brand_code'])
@@ -657,6 +677,7 @@ def pull_family_products_summary(df_products):
     df_summary=pd.DataFrame({
         'strat_op_res': f"${format_number(strat_op_res, 0)}",
         'strat_ben': f"${format_number(strat_ben, 0)}",
+        'strat_ben_io': f"${format_number(strat_ben, 0)}",
         'opt_op_res': f"${format_number(opt_op_res, 0)}",
         'opt_ben': f"${format_number(opt_ben, 0)}",
 
@@ -753,6 +774,8 @@ def pull_data_rows_v2(products_dataframe):
     return grouped_products_json
 
 def pull_data_rows_v3(products_dataframe):
+    if products_dataframe.empty:
+        return []
     grouped = products_dataframe.groupby(['product_code', 'strategy_name']).apply(lambda x: pd.Series({       
         #volume
         '__curr_vol': x['__curr_vol'].sum(),
@@ -764,7 +787,7 @@ def pull_data_rows_v3(products_dataframe):
         '__curr_price': (x['__curr_price'] * x['__curr_vol']).sum() / x['__curr_vol'].sum(),
         '__opt_price': (x['__opt_price'] * x['__opt_vol']).sum() / x['__opt_vol'].sum(),
         '__strat_price': (x['__strat_price'] * x['__strat_vol']).sum() / x['__strat_vol'].sum(),
-        '__strat_curr': 0,
+        '__strat_curr': x['__strat_vol'].sum() / x['__curr_vol'].sum() - 1,
         
         '__elasticity': x['__elasticity'].mean(),
         '__pvp_margin': x['__pvp_margin'].mean(),
@@ -787,7 +810,7 @@ def pull_data_rows_v3(products_dataframe):
         'units_x_product': x['units_x_product'].iloc[0],
         'avg_weight': x['avg_weight'].iloc[0],
     }))
-    grouped['__strat_curr'] = grouped['__strat_price'] / grouped['__curr_price'] - 1
+    grouped['__strat_curr'] = grouped['__strat_vol'] / grouped['__curr_vol'] - 1
 
 
     # margins
@@ -798,7 +821,7 @@ def pull_data_rows_v3(products_dataframe):
     #expected result
     # grouped = grouped.apply(product_strategic_ro_price_kg, axis=1)
     # grouped = grouped.rename(columns={"tltp_strategic_ro": "strat_ro"})
-    grouped["__uplift"] = 0.1
+    grouped["__uplift"] = grouped['__strat_vol']- grouped['__curr_vol']
     grouped['__strat_ro'] = grouped.apply(lambda row: product_percent_ro(row, price_key='__strat_price'), axis=1)
     grouped['__curr_ro'] = grouped.apply(lambda row: product_percent_ro(row, price_key='__curr_price'), axis=1)
     grouped['__incr_ro'] = grouped['__strat_ro'] - grouped['__curr_ro']
@@ -817,11 +840,18 @@ def pull_data_rows_v3(products_dataframe):
     grouped['curr_price'] = grouped.apply(lambda x: format_number(x["__curr_price"], 0), axis=1)
     grouped['opt_price'] = grouped.apply(lambda x: format_number(x["__opt_price"], 0), axis=1)
     grouped['strat_price'] = grouped.apply(lambda x: format_number(x["__strat_price"], 0), axis=1)
-    grouped['strat_curr'] = grouped.apply(lambda x: format_number(x["__strat_curr"], 1), axis=1)
+    grouped['strat_curr'] = grouped.apply(lambda x: format_number(x["__strat_curr"]*100, 1) + "%", axis=1)
 
     grouped['curr_mg'] = grouped.apply(lambda x: format_number(x["curr_mg"], 0), axis=1)
+    grouped['curr_mg']=grouped['curr_mg'].apply(lambda x: f"${x}" if x else "")
+
     grouped['opt_mg'] = grouped.apply(lambda x: format_number(x["opt_mg"], 0), axis=1)
+    grouped['opt_mg']=grouped['opt_mg'].apply(lambda x: f"${x}" if x else "")
+    
     grouped['strat_mg'] = grouped.apply(lambda x: format_number(x["strat_mg"], 0), axis=1)
+    grouped['strat_mg']=grouped['strat_mg'].apply(lambda x: f"${x}" if x else "")
+
+    
 
     grouped['curr_ro'] = grouped.apply(lambda x: format_number(x["__curr_ro"], 1), axis=1)
     grouped['strat_ro'] = grouped.apply(lambda x: format_number(x["__strat_ro"], 1), axis=1)
@@ -829,6 +859,20 @@ def pull_data_rows_v3(products_dataframe):
     grouped['recommended_pvp'] = grouped.apply(lambda x: format_number(x["__recommended_pvp"], 0), axis=1)
     grouped['elasticity'] = grouped.apply(lambda x: format_number(x["__elasticity"], 1), axis=1)
     grouped['uplift'] = grouped.apply(lambda x: format_number(x["__uplift"]/1000, 1, x["brand_code"]), axis=1)
+
+    ### products_dataframe apply same formulas
+    products_dataframe['curr_vol'] = products_dataframe.apply(lambda x: format_number(x["__curr_vol"]/1000.0, 1, x["brand_code"]), axis=1)
+    products_dataframe['opt_vol'] = products_dataframe.apply(lambda x: format_number(x["__opt_vol"]/1000.0, 1, x["brand_code"]), axis=1)
+    products_dataframe['strat_vol'] = products_dataframe.apply(lambda x: format_number(x["__strat_vol"]/1000.0, 1, x["brand_code"]), axis=1)
+
+    grouped['office_rows'] = grouped.apply(lambda row: products_dataframe[products_dataframe['product_code'] == row.name[0]].to_dict(orient='records'), axis=1)
+
+    # for product in grouped.reset_index(drop=True):
+    #     product_code = product['product_code']
+    #     product_dataframe_filtered = products_dataframe[products_dataframe['product_code'] == product_code].to_json(orient='records')
+    #     product['office_rows'] = loads(product_dataframe_filtered)
+    #     product['offices'] = len(product_dataframe_filtered)
+
 
     return loads(grouped.to_json(orient='records'))
     
@@ -946,6 +990,10 @@ def apply_price_format(df_result):
     df_result['critical_price']=df_result['critical_price'].apply(lambda x: f"${x}" if x else "")
     df_result['base_price']=df_result['__base_price'].apply(lambda x: format_number(x, 0) if (isinstance(x, inst) and x is not None) else None)
     df_result['base_price']=df_result['base_price'].apply(lambda x: f"${x}" if x else "")
+
+    df_result['curr_mg']=df_result['curr_mg'].apply(lambda x: f"${format_number(x, 0)}" if x else "")
+    df_result['opt_mg']=df_result['opt_mg'].apply(lambda x: f"${format_number(x, 0)}" if x else "")
+    df_result['strat_mg']=df_result['strat_mg'].apply(lambda x: f"${format_number(x, 0)}" if x else "")
     return df_result
 
 def apply_pvp_format(df_result):
@@ -976,13 +1024,13 @@ def apply_tooltip_format(df_result, sim=False):
 def apply_strat_based_values(df_result):
     df_result["strat_vol"]=df_result.apply(lambda x: format_number(x['__strat_vol'], 1, x['brand_code']), axis=1)
 
-    df_result['var']=df_result["__strat_vol"]/df_result["__curr_vol"]-1
-    df_result['var']=df_result['var'].apply(lambda x: format_number(x*100, 1))
-    df_result['var']=df_result['var'].apply(lambda x: f"{x}%" if x else "")
+    # df_result['var']=df_result["__strat_vol"]/df_result["__curr_vol"]-1
+    # df_result['var']=df_result['var'].apply(lambda x: format_number(x['__strat_io_vol'], 1, x['brand_code']))
+    # df_result['var']=df_result['var'].apply(lambda x: f"{x}%" if x else "")
 
-    df_result['discount']=1-df_result['__strat_price']/df_result['__base_price']
-    df_result['discount']=df_result['discount'].apply(lambda x: format_number(x*100, 1))
-    df_result['discount']=df_result['discount'].apply(lambda x: f"{x}%" if x else "")
+    df_result['strat_curr']=df_result['__strat_vol']/df_result['__curr_vol'] - 1
+    df_result['strat_curr']=df_result['strat_curr'].apply(lambda x: format_number(x*100, 1)+"%")
+
 
     df_result['__var_eb']=df_result['__strat_price']/df_result['__base_price']-1
     df_result['var_eb']=df_result['__var_eb'].apply(lambda x: format_number(x*100, 1))
@@ -1002,6 +1050,9 @@ def format_grouped_rows(grouped_df):
     return grouped_df
 
 def pull_family_products_grouped_rows(df):
+    if df[df["id"]>0] is None or df[df["id"]>0].empty:
+        return {"families": None, "brand": None}
+    
     family_grouped_df = df.groupby(['brand', 'family', 'brand_code']).agg({
         '__curr_vol': 'sum',
         '__opt_vol': 'sum',
@@ -1064,7 +1115,7 @@ def pull_product_view(offer_id):
     df_result["__base_price"]=df_result["base_price"]
     df_result["__curr_price"]=df_result["curr_price"]
     df_result["__opt_price"]=df_result["opt_price"]
-    df_result["__strat_price"]=df_result["strat_price"]
+    df_result["__strat_price"]=round(df_result["strat_price"])
     df_result["__critical_price"]=df_result["critical_price"]
     df_result["__pvp_margin"]=df_result["customer_margin"]
     df_result.rename(columns={'customer_margin': 'pvp_margin'}, inplace=True)
@@ -1081,12 +1132,14 @@ def pull_product_view(offer_id):
 
     df_result["curr_vol"]=df_result.apply(lambda x: format_number(x['curr_vol'], 1, x['brand_code']), axis=1)
     df_result["opt_vol"]=df_result.apply(lambda x: format_number(x['opt_vol'], 1, x['brand_code']), axis=1)
+    df_result['strat_io_vol']=df_result.apply(lambda x: format_number(x['__strat_vol'], 1, x['brand_code']), axis=1)
+
 
     df_result=apply_strat_based_values(df_result)
 
-    df_result['__var_ob']=df_result['__opt_price']/df_result['__base_price']-1
-    df_result['var_ob']=df_result['__var_ob'].apply(lambda x: format_number(x*100, 1))
-    df_result['var_ob']=df_result['var_ob'].apply(lambda x: f"{x}%" if x else "")
+    # df_result['__var_ob']=df_result['__opt_price']/df_result['__base_price']-1
+    # df_result['var_ob']=df_result['__var_ob'].apply(lambda x: format_number(x*100, 1))
+    # df_result['var_ob']=df_result['var_ob'].apply(lambda x: f"{x}%" if x else "")
 
     # indicators to validate
     df_result['__strat_ro_pct']=df_result.apply(pull_strat_ro_pct, axis=1)
@@ -1099,8 +1152,36 @@ def pull_product_view(offer_id):
     df_result['__curr_ro_price']=df_result.apply(pull_ro_curr_price, axis=1)
     df_result['curr_ro_price']=df_result['__curr_ro_price'].apply(lambda x: f"${format_number(x, 0)}" if x else "")
 
-    df_result['__incr_ro']=df_result['__strat_ro_price']-df_result['__curr_ro_price']
-    df_result['incr_ro']=df_result['__incr_ro'].apply(lambda x: f"${format_number(x, 0)}" if x else "")
+    # df_result['__incr_ro']=df_result['__strat_ro_price']-df_result['__curr_ro_price']
+    # df_result['incr_ro']=df_result['__incr_ro'].apply(lambda x: f"${format_number(x, 0)}" if x else "")
+
+    # new: traditional indicators
+    # grouped['curr_ro'] = grouped.apply(lambda x: format_number(x["__curr_ro"], 1), axis=1)
+
+
+    # grouped['strat_ro'] = grouped.apply(lambda x: format_number(x["__strat_ro"], 1), axis=1)
+    df_result['__strat_ro'] = df_result.apply(lambda row: product_percent_ro(row, price_key='__strat_price'), axis=1)
+    df_result['__curr_ro'] = df_result.apply(lambda row: product_percent_ro(row, price_key='__curr_price'), axis=1)
+    df_result['__incr_ro'] = df_result['__strat_ro'] - df_result['__curr_ro']
+    df_result['__recommended_pvp'] = 1.19*df_result["__strat_price"]/(1-df_result["__pvp_margin"])
+
+    df_result['incr_ro'] = df_result.apply(lambda x: format_number(x["__incr_ro"], 1), axis=1)
+    df_result['recommended_pvp'] = df_result.apply(lambda x: "$" + format_number(x["__recommended_pvp"], 0), axis=1)
+    df_result['elasticity'] = df_result.apply(lambda x: format_number(x["__elasticity"], 1) +"%", axis=1)
+
+    df_result['__uplift']=df_result['__strat_vol']- df_result['__curr_vol'] #df_result.apply(lambda x: x['__strat_vol'], axis=1)
+    df_result['uplift']=df_result.apply(lambda x: format_number(x['__uplift']/1000, 1, x['brand_code']), axis=1)
+
+
+
+    #grouped['curr_mg'] = grouped['__curr_price'] - grouped['direct_cost']
+    df_result['curr_mg']=df_result['__curr_price']-df_result['direct_cost']
+
+    #grouped['opt_mg'] = grouped['__opt_price'] - grouped['direct_cost']
+    df_result['opt_mg']=df_result['__opt_price']-df_result['direct_cost']
+
+    #grouped['strat_mg'] = grouped['__strat_price'] - grouped['direct_cost']
+    df_result['strat_mg']=df_result['__strat_price']-df_result['direct_cost']
     ########################
 
     df_result=apply_price_format(df_result)
@@ -1129,7 +1210,7 @@ def pull_product_view(offer_id):
     products_json = loads(products_json)
 
     # data_rows = pull_data_rows(grouped_products_json, df_result)
-    data_rows = pull_data_rows_v2(df_result)
+    # data_rows = pull_data_rows_v2(df_result)
 
     data_rows2 = pull_data_rows_v3(df_result)
     
@@ -1142,11 +1223,11 @@ def pull_product_view(offer_id):
     return {
         "offer_data": pull_offer_data(offer_id),
         "header": header,
-        "data_rows": data_rows,
+        # "data_rows": data_rows,
         #"grouped_data": loads(df_result_grouped),
         "summary": summary,
         "grouped_rows": grouped_rows,
-        "data_rows2": data_rows2
+        "data_rows": data_rows2
     }   
 
 
