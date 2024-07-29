@@ -31,7 +31,7 @@ echo "$NGINX_MAIN_CONF" | sudo tee /etc/nginx/nginx.conf > /dev/null
 NGINX_SITE_CONF="
 server {
     listen 80;
-    server_name pbpf-modern-offer-service-dev.pricemaker.io;
+    server_name pbpf-traditional-offer-service.pricemaker.io;
 
     # Redirect all HTTP traffic to HTTPS
     location / {
