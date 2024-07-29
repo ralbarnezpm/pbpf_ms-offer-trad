@@ -11,9 +11,9 @@ After=network.target
 [Service]
 User=ubuntu
 Group=www-data
-WorkingDirectory=/home/ubuntu/pbpf_ms-offer-ra1
-Environment=\"PATH=/home/ubuntu/pbpf_ms-offer-ra1/env/bin\"
-ExecStart=/home/ubuntu/pbpf_ms-offer-ra1/env/bin/gunicorn --workers 2 --bind 127.0.0.1:8000 --timeout 240 wsgi:app
+WorkingDirectory=/home/ubuntu/pbpf_ms-offer-trad
+Environment=\"PATH=/home/ubuntu/pbpf_ms-offer-trad/env/bin\"
+ExecStart=/home/ubuntu/pbpf_ms-offer-trad/env/bin/gunicorn --workers 2 --bind 127.0.0.1:8000 --timeout 240 wsgi:app
 
 [Install]
 WantedBy=multi-user.target
