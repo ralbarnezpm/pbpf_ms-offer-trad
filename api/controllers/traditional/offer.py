@@ -4,7 +4,7 @@ from math import ceil, isnan
 from api.controllers.comment import create_promotion_comment, pull_created_offer_comment
 from api.controllers.traditional.catalog import pull_catalog_offer_products_coincidence
 from api.controllers.traditional.customers import pull_customers, pull_offer_customer
-from api.controllers.traditional.simulator import offer_simulator
+from api.controllers.traditional.simulator import offer_trad_simulator
 from api.controllers.notification import create_notification
 from api.controllers.utils import get_months, pull_dataframe_from_sql, pull_outcome_query, query_execute_w_err
 from api.models.pb_promotion import Promotion
@@ -203,15 +203,7 @@ def pull_aggregated_product_rows(df):
 def pull_products(promotion_id):
     df, distributors_name = pull_customer_products(promotion_id)
     print(df.columns)
-
-    # df=df.apply(product_view_strategic_ro, axis=1)
-    # #df=df.apply(product_view_critical_price, axis=1)
-    # df=df.apply(product_view_discount, axis=1)
     df = pull_aggregated_product_rows(df)
-
-    # df_oncatalog=prods_on_catalog(promotion_id, distributors_name)
-    # df=pd.merge(df, df_oncatalog[['product_code', 'on_catalog']], on='product_code', how='left')
-
     df_oncatalog_onoffer = pull_products_on_catalog_offer(promotion_id)
     df=pd.merge(df, df_oncatalog_onoffer, on='product_code', how='left')
 
@@ -220,8 +212,6 @@ def pull_products(promotion_id):
     cols_round_1 = ["strategic_volume", "oc_pesos_kilos", "oc_adim_sale", "tltp_strategic_mg"]
     df[cols_round_1] = df[cols_round_1].applymap(lambda x: format_number(x, 1))
 
-    # df['category_id']=df['category_id'].fillna(-1).astype(int)
-    # df['subcategory_id']=df['subcategory_id'].fillna(-1).astype(int)
     df['brand_code']=df['brand_code'].fillna(-1).astype(int)
     df['on_catalog']=df['on_catalog'].fillna(-1).astype(int)
     df['on_offer']=df['on_offer'].fillna(-1).astype(int)
@@ -232,7 +222,6 @@ def pull_products(promotion_id):
     json_data_python = loads(json_data_pandas)
 
     del df
-    # del df_oncatalog
     del df_oncatalog_onoffer
 
     return json_data_python
@@ -269,14 +258,8 @@ def create_promotion_controller(user_id, promotion_dict):
 
 
 def insert_offer_product(offer_id, data_rows):
-    # customer_info=pull_offer_customer(offer_id)
-    # customer_id, customer_name = customer_info.values()
     product_codes=[f"'{data['offer_product_id']}'" for data in data_rows]
-    
-    #df_current_products=pull_products_on_offer(offer_id)
-    #current_product_codes=df_current_products['product_id'].tolist()
-    #new_product_codes = [code for code in product_codes if code not in current_product_codes]
-    #del df_current_products
+
 
     new_product_codes=product_codes
 
@@ -347,7 +330,8 @@ def insert_statetment(offer_id, product_codes):
                         strategic_volume_kg,
                         distributor_name,
                         active,
-                        direct_cost
+                        direct_cost,
+                        distributor_id
                     )
                     SELECT
                         {offer_id} AS promotion_id,
@@ -397,7 +381,8 @@ def insert_statetment(offer_id, product_codes):
                         o.volumen_estrategico_kg AS strategic_volume_kg,
                         o.oficina AS distributor_name,
                         1 as active,
-                        o.costo_directo AS direct_cost
+                        o.costo_directo AS direct_cost,
+                        of.office_code AS distributor_id
                     FROM
                         oferta_tradicional_base o
                     JOIN
@@ -406,6 +391,8 @@ def insert_statetment(offer_id, product_codes):
                         category c ON pl.category = c.id
                     JOIN
                         subcategory s ON pl.subcategory = s.id
+                    JOIN
+                        office of ON o.oficina = of.office_name
                     WHERE o.id_producto_estrategia IN ({product_codes}) AND o.oficina IN ({distributors_name})
                     ON DUPLICATE KEY UPDATE
                         product_id = VALUES(product_id),
@@ -537,6 +524,7 @@ def pull_offer_family_products(offer_id):
                     
                     p.promotion_name,
                     p.id AS promotion_id,
+                    pl.product_id AS offer_product_id,
                     pl.product_code,
                     pl.product_description,
                     pl.units_x_product,
@@ -574,6 +562,7 @@ def pull_offer_family_products(offer_id):
 
                     pl.active,
                     pl.distributor_name,
+                    pl.distributor_id as distributor_code,
 
                     pl.strategic_volume_kg AS tooltip_strat_vol_kg,
 
@@ -594,20 +583,44 @@ def pull_strat_ro_pct(row):
     # row['strat_ro_pct'] = format_number(strategic_ro*100, 1)
     return row['strat_ro_pct']
 
+# def pull_ro_strat_price(row):
+#     #RO$Estr = volumen_estrategico * (precio_estrategico - costo_directo - oc_pesos_kilos - (oc_adim_venta*precio_estrategico))
+#     strategic_price_kg = umd_to_kg_price('strat_price', row['brand_code'], row)
+#     direct_cost_kg = umd_to_kg_price('direct_cost', row['brand_code'], row)
+#     strategic_volume_kg = umd_to_kg_price('__strat_vol', row['brand_code'], row)
+#     strategic_ro = strategic_volume_kg*(strategic_price_kg - direct_cost_kg - row['oc_pesos_kilos'] - (row['oc_adim_sale']*strategic_price_kg))
+#     # row['strat_ro_price']=format_number(strategic_ro, 0)
+#     # return row['strat_ro_price']
+#     return strategic_ro
+
 def pull_ro_strat_price(row):
-    #RO$Estr = volumen_estrategico * (precio_estrategico - costo_directo - oc_pesos_kilos - (oc_adim_venta*precio_estrategico))
+    # Obtener los valores de cada variable usando umd_to_kg_price y valores del row
     strategic_price_kg = umd_to_kg_price('strat_price', row['brand_code'], row)
-    direct_cost_kg = umd_to_kg_price('direct_cost', row['brand_code'], row)
+    direct_cost_kg = umd_to_kg_price('direct_cost', row['brand_code'], row) if row['direct_cost'] else 1
     strategic_volume_kg = umd_to_kg_price('__strat_vol', row['brand_code'], row)
-    strategic_ro = strategic_volume_kg*(strategic_price_kg - direct_cost_kg - row['oc_pesos_kilos'] - (row['oc_adim_sale']*strategic_price_kg))
-    # row['strat_ro_price']=format_number(strategic_ro, 0)
-    # return row['strat_ro_price']
+
+    # Imprimir valores para depuración
+    print(f"strategic_price_kg: {strategic_price_kg}")
+    print(f"direct_cost: {row['direct_cost']}")
+    print(f"direct_cost_kg: {direct_cost_kg}")
+    print(f"strategic_volume_kg: {strategic_volume_kg}")
+    print(f"oc_pesos_kilos: {row['oc_pesos_kilos']}")
+    print(f"oc_adim_sale: {row['oc_adim_sale']}")
+  
+
+    # Calcular strategic_ro
+    strategic_ro = strategic_volume_kg * (strategic_price_kg - direct_cost_kg - row['oc_pesos_kilos'] - (row['oc_adim_sale'] * strategic_price_kg))
+    
+
+    
+    # Retornar el resultado calculado
     return strategic_ro
+
 
 def pull_ro_opt_price(row):
     #RO$Actual = volumen_actual * (precio_actual - costo_directo - oc_pesos_kilos - (oc_adim_venta*precio_actual))
     opt_price_kg = umd_to_kg_price('opt_price', row['brand_code'], row)
-    direct_cost_kg = umd_to_kg_price('direct_cost', row['brand_code'], row)
+    direct_cost_kg = umd_to_kg_price('direct_cost', row['brand_code'], row) if row['direct_cost'] else 1
     current_volume_kg = umd_to_kg_price('__opt_vol', row['brand_code'], row)
     opt_ro = current_volume_kg*(opt_price_kg - direct_cost_kg - row['oc_pesos_kilos'] - (row['oc_adim_sale']*opt_price_kg))
     # row['curr_ro_price']=format_number(current_ro, 0)
@@ -617,7 +630,7 @@ def pull_ro_opt_price(row):
 def pull_ro_curr_price(row):
     #RO$Actual = volumen_actual * (precio_actual - costo_directo - oc_pesos_kilos - (oc_adim_venta*precio_actual))
     current_price_kg = umd_to_kg_price('curr_price', row['brand_code'], row)
-    direct_cost_kg = umd_to_kg_price('direct_cost', row['brand_code'], row)
+    direct_cost_kg = umd_to_kg_price('direct_cost', row['brand_code'], row) if row['direct_cost'] else 1
     current_volume_kg = umd_to_kg_price('__curr_vol', row['brand_code'], row)
     current_ro = current_volume_kg*(current_price_kg - direct_cost_kg - row['oc_pesos_kilos'] - (row['oc_adim_sale']*current_price_kg))
     # row['curr_ro_price']=format_number(current_ro, 0)
@@ -809,6 +822,9 @@ def pull_data_rows_v3(products_dataframe):
         'brand_code': x['brand_code'].iloc[0],
         'units_x_product': x['units_x_product'].iloc[0],
         'avg_weight': x['avg_weight'].iloc[0],
+        'offer_product_id': x['offer_product_id'].iloc[0],
+        # 'ever_modified': 0,
+
     }))
     grouped['__strat_curr'] = grouped['__strat_vol'] / grouped['__curr_vol'] - 1
 
@@ -851,7 +867,7 @@ def pull_data_rows_v3(products_dataframe):
     grouped['strat_mg'] = grouped.apply(lambda x: format_number(x["strat_mg"], 0), axis=1)
     grouped['strat_mg']=grouped['strat_mg'].apply(lambda x: f"${x}" if x else "")
 
-    
+    grouped["strat_price_modified"] = 0
 
     grouped['curr_ro'] = grouped.apply(lambda x: format_number(x["__curr_ro"], 1), axis=1)
     grouped['strat_ro'] = grouped.apply(lambda x: format_number(x["__strat_ro"], 1), axis=1)
@@ -865,7 +881,7 @@ def pull_data_rows_v3(products_dataframe):
     products_dataframe['opt_vol'] = products_dataframe.apply(lambda x: format_number(x["__opt_vol"]/1000.0, 1, x["brand_code"]), axis=1)
     products_dataframe['strat_vol'] = products_dataframe.apply(lambda x: format_number(x["__strat_vol"]/1000.0, 1, x["brand_code"]), axis=1)
 
-    grouped['office_rows'] = grouped.apply(lambda row: products_dataframe[products_dataframe['product_code'] == row.name[0]].to_dict(orient='records'), axis=1)
+    grouped['product_rows'] = grouped.apply(lambda row: products_dataframe[products_dataframe['product_code'] == row.name[0]].to_dict(orient='records'), axis=1)
 
     # for product in grouped.reset_index(drop=True):
     #     product_code = product['product_code']
@@ -1227,11 +1243,205 @@ def pull_product_view(offer_id):
         #"grouped_data": loads(df_result_grouped),
         "summary": summary,
         "grouped_rows": grouped_rows,
-        "data_rows": data_rows2
+        "data_rows": data_rows2,
+        "mg_pvp": 0.25
     }   
 
+def pull_offer_offices(offer_id):
+    query = f"""select distinct distributor_name as office from pb_promotion_product_historic ppph where promotion_id={offer_id};"""
+    outcome = pull_outcome_query(query)
+    return [row['office'] for row in outcome]
 
-def pull_product_optimization_view(product_code, customer, offer_id):
+
+def pull_aggregated_product_view(product_code, offer_id):
+    query = f"""SELECT 
+                    cd.codigo_producto,
+                    cd.codigo_oficina,
+                    IFNULL(FormatNumberPF(SUM(cd.mape_lineal * tpl.strategic_volume) / SUM(tpl.strategic_volume)), '-') AS mape_lineal,
+                    IFNULL(FormatNumberPF(SUM(cd.mape_log * tpl.strategic_volume) / SUM(tpl.strategic_volume)), '-') AS mape_log,
+                    IFNULL(FormatNumberPF(SUM(cd.mape_log_log * tpl.strategic_volume) / SUM(tpl.strategic_volume)), '-') AS mape_log_log,
+                    IFNULL(FormatNumberPF(SUM(cd.mape_logcuad * tpl.strategic_volume) / SUM(tpl.strategic_volume)), '-') AS mape_logcuad,
+                    IFNULL(FormatNumberPF(SUM(cd.elasticidad * tpl.strategic_volume) / SUM(tpl.strategic_volume)), '-') AS elasticidad,
+                    IFNULL(ind_lineal, 0) AS ind_lineal,
+                    IFNULL(ind_log, 0) AS ind_log,
+                    IFNULL(ind_log_log, 0) AS ind_log_log,
+                    IFNULL(ind_log_log_cuadratico, 0) AS ind_log_log_cuadratico,
+                    IFNULL(FormatPricePF(SUM(tpl.current_volume * tpl.current_price) / SUM(tpl.current_volume)), '-') AS precio_act,
+                    IFNULL(FormatPricePF(SUM(tpl.optimization_volume * tpl.optimization_price) / SUM(tpl.optimization_volume)), '-') AS precio_opt,
+                    IFNULL(FormatNumberPF(SUM(tpl.current_volume)), '-') AS vol_act,
+                    IFNULL(FormatNumberPF(SUM(tpl.optimization_volume)), '-') AS vol_opt
+                FROM (
+                    SELECT
+                        codigo_producto,
+                        codigo_oficina,
+                        mape_lineal,
+                        mape_log,
+                        mape_log_log,
+                        mape_logcuad,
+                        CASE
+                            WHEN ind_lineal = 1 THEN elasticidad_lineal
+                            WHEN ind_log = 1 THEN ELASTICIDAD_LOGARITIMICA
+                            WHEN ind_log_log = 1 THEN elasticidad_log_log
+                            ELSE ELASTICIDAD_LOGARITMO_CUADRATICO
+                        END AS elasticidad,
+                        ind_lineal,
+                        ind_log,
+                        ind_log_log,
+                        ind_log_log_cuadratico,
+                        nombre_oficina
+                    FROM curvas_demanda_tradicional
+                    WHERE codigo_oficina IN (
+                        SELECT DISTINCT o.office_code
+                        FROM pb_promotion_product t
+                        LEFT JOIN office o ON t.distributor_name = o.office_name
+                        WHERE t.promotion_id = {offer_id}
+                    ) AND codigo_producto = '{product_code}' AND sin_modelo = 0
+                ) AS cd
+                LEFT JOIN (
+                    SELECT
+                        tpl.*,
+                        p.code_product,
+                        o.office_code
+                    FROM pb_promotion_product tpl
+                    LEFT JOIN pb_product_list p ON tpl.product_id = p.id
+                    LEFT JOIN office o ON tpl.distributor_name = o.id
+                    WHERE tpl.promotion_id = {offer_id}
+                ) AS tpl ON cd.codigo_producto = tpl.product_code AND tpl.distributor_name = cd.nombre_oficina
+                GROUP BY cd.codigo_producto;"""
+    outcome = pull_outcome_query(query)
+    for r in outcome:
+        mape_lineal=r[2]
+        mape_log=r[3]
+        mape_log_log=r[4]
+        mape_logcuad=r[5]
+        elasticidad=r[6]
+        ind_lineal=r[7]
+        ind_log=r[8]
+        ind_log_log=r[9]
+        ind_log_log_cuadratico=r[10]
+
+        if ind_lineal==1:
+            mape=mape_lineal
+            mape_name="Elast. Lineal"
+            #elasticidad=elasticidad_lineal
+            other_mape_names=["Log-Cuad", "Log-Log", "Log"]
+            other_mape_values=[mape_logcuad, mape_log_log, mape_log]
+        elif ind_log==1:
+            mape=mape_log
+            mape_name="Log"
+            #elasticidad=elasticidad_logaritmica
+            other_mape_names=["Log-Cuad", "Log-Log", "Elast. Lineal"]
+            other_mape_values=[mape_logcuad, mape_log_log, mape_lineal]
+        elif ind_log_log==1:
+            mape=mape_log_log
+            mape_name="Log-Log"
+            #elasticidad=elasticidad_log_log
+            other_mape_names=["Log-Cuad", "Log", "Elast. Lineal"]
+            other_mape_values=[mape_logcuad, mape_log, mape_lineal]
+        elif ind_log_log_cuadratico==1:
+            mape=mape_logcuad
+            mape_name="Log-Cuad"
+            #elasticidad=elasticidad_logaritmo_cuadratico
+            other_mape_names=["Log-Log", "Log", "Elast. Lineal"]
+            other_mape_values=[mape_log_log, mape_log, mape_lineal]
+        else:
+            #producto with no models
+            mape="-"
+            mape_name="-"
+            other_mape_names=["-", "-", "-"]
+            other_mape_values=["-", "-", "-"]
+        # other_mape_values = [to_number_format(v) for v in other_mape_values] if other_mape_values != ["-", "-", "-"] else other_mape_values
+        return {
+            "mape_winner_name": mape_name,
+            "mape": mape,
+            "elasticidad": elasticidad if elasticidad else "-",
+            "precio_actual": r["precio_act"],
+            "precio_optimizado": r["precio_opt"],
+            "volumen_actual": r["vol_act"],
+            "volumen_optimizado": r["vol_opt"],
+            "other_mape_names": other_mape_names,
+            "other_mape_values": other_mape_values,
+        }
+    
+    return {
+            "mape_winner_name": "",
+            "mape": "-" ,
+            "elasticidad": "-",
+            "precio_actual": "-",
+            "precio_optimizado": "-",
+            "volumen_actual": "-",
+            "volumen_optimizado": "-",
+            "other_mape_names": ["-", "-", "-"],
+            "other_mape_values": ["-", "-", "-"],
+        }
+
+
+def pull_product_view_product_info_v2(product_code, offer_id):
+    query = f"""select m.NOMBRE_LINEA AS linea, m.NOMBRE_FAM_PRODUCCION AS familia, pl.subfamily AS subfamilia, m.CODIGO_MARCA AS marca,
+                    B.* , C.cartera , C.crec_interanual , C.vta_prom , C.vta_prom_3m , C.dias_inventario,
+                    (p.PESO_PROMEDIO/p.UNIDAD_X_PRODUCTO)*1000 AS peso_unidad,
+                    p.UNIDAD_X_PRODUCTO AS unidad_x_producto, p.PESO_PROMEDIO AS peso_promedio,
+                    p.ESTADO_PRODUCTO as formato
+                FROM (
+                select codigo_producto,
+                avg(ticket_vol_ump) as ticket_vol_ump, avg(FREC_COMPRA) as frec_compra,
+                avg(costo_directo_ump) as costo_directo_ump, avg(costo_directo_kg) as costo_directo_kg,
+                avg(costo_proyectado) as costo_proyectado, avg(costo_proyec_kg) as costo_proyec_kg
+                from vista_producto_tradicional
+                where codigo_oficina IN (
+                    SELECT o.office_code
+                    FROM pb_promotion_product tpl
+                    LEFT JOIN office o ON o.office_name=tpl.distributor_name
+                    WHERE tpl.promotion_id={offer_id}
+                    GROUP BY o.office_code)
+                and codigo_producto = '{product_code}'
+                group by codigo_producto) as B
+                left join (
+                select A.codigo_producto, sum(A.cartera) as cartera, sum(A.ump)/sum(A.ump_ant)-1 as crec_interanual , sum(A.vta_prom) as vta_prom, sum(A.vta_prom_3m) as vta_prom_3m , max(dias_inventario) as dias_inventario
+                from (
+                select distinct codigo_producto, codigo_oficina, cartera , ump, ump_ant, VTA_PROM , VTA_PROM_3M, DIAS_INVENTARIO
+                from vista_producto_tradicional
+                where codigo_oficina IN (
+                    SELECT o.office_code
+                    FROM pb_promotion_product tpl
+                    LEFT JOIN office o ON o.office_name=tpl.distributor_name
+                    WHERE tpl.promotion_id={offer_id}
+                    GROUP BY o.office_code)
+                and codigo_producto = '{product_code}') as A
+                group by A.codigo_producto) as C
+                on B.codigo_producto = C.codigo_producto
+                LEFT JOIN maestra_productos m ON B.CODIGO_PRODUCTO=m.CODIGO_PRODUCTO
+                LEFT JOIN pb_product_list pl ON B.CODIGO_PRODUCTO=pl.code_product
+                LEFT JOIN pf_producto p ON p.CODIGO_PRODUCTO=m.CODIGO_PRODUCTO;"""
+    outcome = pull_outcome_query(query)
+    print(query)
+    for r in outcome:
+        row=dict(r)
+        # print(row)
+        crecimiento_interanual = f"{to_number_format(row.get('crec_interanual')*100, 1)}%" if row.get('crec_interanual') != None else "-"
+        return {
+            "linea": row["linea"],
+            "familia": row["familia"],
+            "subfamilia": row["subfamilia"],
+            "marca":row["marca"],
+            "peso_caja": to_number_format(row["peso_promedio"], 1),
+            "peso_unidad": to_number_format(row["peso_unidad"], 0),
+            "unidades":round(row["unidad_x_producto"]),
+            "formato_venta": row["formato"],
+            "costo_directo": to_number_format(row["costo_directo_ump"], 0),
+            "costo_proyeccion": to_number_format(row["costo_proyectado"], 0),
+            "ticket_vol_ump": to_number_format(row["ticket_vol_ump"], 1),
+            "cartera": to_number_format(row["cartera"], 0),
+            "frec_compra": to_number_format(row["frec_compra"], 1),
+            "crec_interanual": crecimiento_interanual,
+            "vta_prom": f"{to_number_format(row.get('vta_prom'), 0)} ({to_number_format(row.get('vta_prom_3m'), 0)})",
+            "dias_inventario": f"{to_number_format(row.get('dias_inventario'), 1)} dias",
+        }   
+
+
+def pull_product_optimization_view(product_code, offer_id):
+    offices = pull_offer_offices(offer_id)
+    offices_in_filter = ", ".join([f'"{office}"' for office in offices])
     query = f"""SELECT d.*, p.brand_code
                 FROM detalles_optimizacion_sellout d
                 JOIN pb_product_list p ON d.codigo_producto=p.code_product
@@ -1454,18 +1664,23 @@ def save_offer(offer_id, data_rows):
     
     return msg, upd
 
-def simulator_lambda(row, customer):
-    if row["strat_price_modified"]==1:
-        sim_vars=offer_simulator(row["product_code"], customer, row["__strat_price"])
-        row["__strat_vol"]=sim_vars["strat_volume"]
-        row["__tooltip_strategic_pxu"]=sim_vars["strat_up"]
-        row["__tooltip_strategic_sp"]=sim_vars["strat_sp"]
-        row["__tooltip_strat_vol_kg"]=sim_vars["strat_volume_kg"]
+def simulator_lambda(row, mg_pvp):
+    strat_price_modified = row["strat_price_modified"]
+    print("strat_price_modified]:", strat_price_modified)
+    for office_product in row["product_rows"]:
+        if strat_price_modified==1 and office_product["active_office"]==1:
+            sim_vars=offer_trad_simulator(office_product["product_code"], office_product["distributor_code"], office_product["__strat_price"], mg_pvp)
+            print("sim_vars:", sim_vars)
+            office_product["__strat_vol"]=sim_vars["strat_volume"]
 
-        row["__strat_ro_price"]=sim_vars["strat_ro"]
-        row['strat_ro_price']=f"{format_number(row['__strat_ro_price'], 0)}" if row['__strat_ro_price'] else "-"
-        #df_result['__strat_ro_price']=df_result.apply(pull_ro_strat_price, axis=1)
-        #df_result['strat_ro_price']=df_result['__strat_ro_price'].apply(lambda x: f"${format_number(x, 0)}" if x else "")
+            office_product["__tooltip_strategic_pxu"]=sim_vars["strat_up"]
+            office_product["__tooltip_strategic_sp"]=sim_vars["strat_sp"]
+            office_product["__tooltip_strat_vol_kg"]=sim_vars["strat_volume_kg"]
+
+            office_product["__strat_ro_price"]=sim_vars["strat_ro"]
+            office_product['strat_ro_price']=f"{format_number(office_product['__strat_ro_price'], 0)}" if office_product['__strat_ro_price'] else "-"
+            #df_result['__strat_ro_price']=df_result.apply(pull_ro_strat_price, axis=1)
+            #df_result['strat_ro_price']=df_result['__strat_ro_price'].apply(lambda x: f"${format_number(x, 0)}" if x else "")
     return row
 
 def flatten_data_rows(data_rows):
@@ -1477,8 +1692,9 @@ def flatten_data_rows(data_rows):
     return flat_data_rows
 
 
-def simulator_handler(offer_id, data_rows, offer_data):
-    data_rows = [simulator_lambda(data, offer_data["customer"]) for data in data_rows]
+def simulator_handler(offer_id, data_rows, offer_data, mg_pvp):
+    
+    data_rows = [simulator_lambda(data, mg_pvp) for data in data_rows]
     flatten_data=flatten_data_rows(data_rows)
 
     df_result=pd.DataFrame(flatten_data)
@@ -1494,7 +1710,7 @@ def simulator_handler(offer_id, data_rows, offer_data):
     grouped_rows = pull_family_products_grouped_rows(df_result)
     products_json = df_result.to_json(orient='records')
     products_json = loads(products_json)
-    data_rows = pull_data_rows_v2(df_result)
+    data_rows = pull_data_rows_v3(df_result)
 
     del df_result
 
@@ -1507,24 +1723,24 @@ def simulator_handler(offer_id, data_rows, offer_data):
     } 
 
 def delete_offer_product(offer_product_id):
-    query = f"DELETE FROM pb_promotion_product WHERE id={offer_product_id};"
+    query = f"DELETE FROM pb_promotion_product WHERE product_id={offer_product_id};"
     e=query_execute_w_err(query)
     if e:
         return f"error on delete offer product: {str(e)}", 400
     return "offer product deleted successfully", 200
 
 def clean_brand_tracking_df_active(row):
-    if row["base_price"] - row["strategic_price"] > 0:
+    if row["current_price"] - row["strategic_price"] > 0:
         return 1
     else:
         return 0
 
 def clean_brand_tracking_df_discount(row):
-    return 1-row['strategic_price']/row['base_price']
+    return 1-row['strategic_price']/row['current_price']
 
 
 def clean_brand_tracking_df(df):
-    df_cleaned = df[["base_price", "current_price", "strategic_price", "product_code", "current_volume", "strategic_volume"]].copy()
+    df_cleaned = df[["current_price", "strategic_price", "product_code", "current_volume", "optimization_price", "optimization_volume", "strategic_volume", "distributor_name"]].copy()
     df_cleaned["active"] = df_cleaned.apply(clean_brand_tracking_df_active, axis=1)
     df_cleaned["discount"] = df_cleaned.apply(clean_brand_tracking_df_discount, axis=1)
     return df_cleaned
@@ -1559,47 +1775,100 @@ def pull_brand_tracking_header(df):
     active_neg = df["active_neg"].sum()
     active_eje = df["active_eje"].sum()
     
-    header = {
-        "collaborative": f"{format_number(active_col*100/active_ini, 1)}% ({active_col}/{active_ini})",
-        "negotiation": f"{format_number(active_neg*100/active_col, 1)}% ({active_neg}/{active_col})",
-        "execution": f"{format_number(active_eje*100/active_neg, 1)}% ({active_eje}/{active_neg})",
-    }
+    header = {}
+
+    if active_ini != 0:
+        header["collaborative"] = f"{format_number(active_col*100/active_ini, 1)}% ({active_col}/{active_ini})"
+    else:
+        header["collaborative"] = f"-%({active_col}/{active_ini})"
+
+    if active_col != 0:
+        header["negotiation"] = f"{format_number(active_neg*100/active_col, 1)}% ({active_neg}/{active_col})"
+    else:
+        header["negotiation"] = f"-%({active_neg}/{active_col})"
+
+    if active_neg != 0:
+        header["execution"] = f"{format_number(active_eje*100/active_neg, 1)}% ({active_eje}/{active_neg})"
+    else:
+        header["execution"] = f"-%({active_eje}/{active_neg})"
+
     return header
 
 
-        # products_line_tracking.append({
-        #     "product_id": id_product,
-        #     "product_code": code_product,
-        #     "short_brand": short_brand,
-        #     "subfamily": subfamily,
-        #     "opt_price":  to_number_format(round(opt_price)),
-        #     "base_price":  to_number_format(round(base_price)),
-        #     "act_price": to_number_format(round(inicial_curr_price)),
-        #     "product_description": current_description_product,
-        #     "model": model,
-        #     "recommendation": recommendation,
-        #     "category": category,
-        #     "subcategory": subcategory,
-        #     "inicial": {
-        #         "prop_price": to_number_format(round(inicial_prop_price)) if inicial_prop_price is not None else 0,
-        #         "discount": inicial_discount,
-        #     },
-        #     "colaborativa": {
-        #         "prop_price": to_number_format(round(colab_prop_price)) if colab_prop_price is not None else 0,
-        #         "discount": colab_discount,
-        #         "icon": colab_icon
-        #     },
-        #     "negociacion": {
-        #         "prop_price": to_number_format(round(neg_prop_price)) if neg_prop_price is not None else 0,
-        #         "discount": neg_discount,
-        #         "icon": neg_icon
-        #     },
-        #     "ejecucion": {
-        #         "prop_price": to_number_format(round(ejec_prop_price)) if ejec_prop_price is not None else 0,
-        #         "discount": ejec_discount,
-        #         "icon": ejec_icon
-        #     },
-        # })
+def pull_brand_tracking_grouped_data_rows(df):
+    # Apply the condition to filter rows where any discount is greater than 0
+    filtered_df = df[(df["discount"] > 0) | (df["discount_col"] > 0) | (df["discount_neg"] > 0) | (df["discount_eje"] > 0)]
+
+    # Group by 'product_code' and calculate weighted mean for price fields using their respective volume fields
+    grouped_df = filtered_df.groupby('product_code').apply(
+        lambda x: pd.Series({
+            'unique_offices': x["distributor_name"].nunique(),
+            'short_brand': x['short_brand'].iloc[0],
+            'subfamily': x['subfamily'].iloc[0],
+            'product_description': x['product_description'].iloc[0],
+            'model': x['model'].iloc[0],
+            'strategy_name': x['strategy_name'].iloc[0],
+            'brand': x['brand'].iloc[0],
+            'family': x['family'].iloc[0],
+            # Corrected weighted mean calculations for prices using respective volume columns
+            'current_price': (x['current_price'] * x['current_volume']).sum() / x['current_volume'].sum(),
+            'optimization_price': (x['optimization_price'] * x['optimization_volume']).sum() / x['optimization_volume'].sum(),
+            # Taking the average for discounts using 1 - a/b formula
+            'discount': 1 - (x['strategic_price'] * x['strategic_volume']).sum() / (x['current_price'] * x['current_volume']).sum(),
+            'discount_col': 1 - (x['strategic_price_col'] * x['strategic_volume_col']).sum() / (x['current_price'] * x['current_volume']).sum(),
+            'discount_neg': 1 - (x['strategic_price_neg'] * x['strategic_volume_neg']).sum() / (x['current_price'] * x['current_volume']).sum(),
+            'discount_eje': 1 - (x['strategic_price_eje'] * x['strategic_volume_eje']).sum() / (x['current_price'] * x['current_volume']).sum(),
+            # Corrected weighted mean for strategic prices using strategic volumes
+            'strategic_price': (x['strategic_price'] * x['strategic_volume']).sum() / x['strategic_volume'].sum(),
+            'strategic_price_col': (x['strategic_price_col'] * x['strategic_volume_col']).sum() / x['strategic_volume_col'].sum(),
+            'strategic_price_neg': (x['strategic_price_neg'] * x['strategic_volume_neg']).sum() / x['strategic_volume_neg'].sum(),
+            'strategic_price_eje': (x['strategic_price_eje'] * x['strategic_volume_eje']).sum() / x['strategic_volume_eje'].sum(),
+            'icon_col': x['icon_col'].iloc[0],
+            'icon_neg': x['icon_neg'].iloc[0],
+            'icon_eje': x['icon_eje'].iloc[0],
+        })
+    ).reset_index()
+
+    products_line_tracking = []
+    
+    # Iterate over the grouped data
+    for index, row in grouped_df.iterrows():
+        products_line_tracking.append({
+            "product_code": row["product_code"],
+            "short_brand": row["short_brand"],
+            "subfamily": row["subfamily"],
+            "curr_price": format_number(row["current_price"], 0) if pd.notna(row["current_price"]) else "-",
+            "opt_price": format_number(row["optimization_price"], 0) if pd.notna(row["optimization_price"]) else "-",
+            "product_description": row["product_description"],
+            "model": row["model"],
+            "strategy": row["strategy_name"],
+            "brand": row["brand"],
+            "family": row["family"],
+            "offices": row["unique_offices"],
+            "initial": {
+                # Check for NaN in strategic_price and discount fields
+                "strat_price": f'${format_number(row["strategic_price"], 0)}' if pd.notna(row["strategic_price"]) else "$-",
+                "discount": f'{format_number(row["discount"] * 100, 1)}%' if pd.notna(row["strategic_price"]) else "-",
+            },
+            "collaborative": {
+                "strat_price": f'${format_number(row["strategic_price_col"], 0)}' if pd.notna(row["strategic_price_col"]) else "$-",
+                "discount": f'{format_number(row["discount_col"] * 100, 1)}%' if pd.notna(row["strategic_price_col"]) else "-",
+                "icon": row["icon_col"]
+            },
+            "negotiation": {
+                "strat_price": f'${format_number(row["strategic_price_neg"], 0)}' if pd.notna(row["strategic_price_neg"]) else "$-",
+                "discount": f'{format_number(row["discount_neg"] * 100, 1)}%' if pd.notna(row["strategic_price_neg"]) else "-",
+                "icon": row["icon_neg"]
+            },
+            "execution": {
+                "strat_price": f'${format_number(row["strategic_price_eje"], 0)}' if pd.notna(row["strategic_price_eje"]) else "$-",
+                "discount": f'{format_number(row["discount_eje"] * 100, 1)}%' if pd.notna(row["strategic_price_eje"]) else "-",
+                "icon": row["icon_eje"]
+            },
+        })
+    
+    return products_line_tracking
+
 
 def pull_brand_tracking_data_rows(df):
     products_line_tracking = []
@@ -1608,6 +1877,7 @@ def pull_brand_tracking_data_rows(df):
 
         products_line_tracking.append({
             #"product_id": id_product,
+            "distributor_name": row["distributor_name"],
             "product_code": row["product_code"],
             "short_brand": row["short_brand"],
             "subfamily": row["subfamily"],
@@ -1620,22 +1890,23 @@ def pull_brand_tracking_data_rows(df):
             "brand": row["brand"],
             "family": row["family"],
             "initial": {
-                "strat_price": f'${format_number(row["strategic_price"], 0)}' if row["strategic_price"] is not None else "$-",
-                "discount": f'{format_number(row["discount"]*100, 1)}%',
+                # Check for NaN in strategic_price and discount fields
+                "strat_price": f'${format_number(row["strategic_price"], 0)}' if pd.notna(row["strategic_price"]) else "$-",
+                "discount": f'{format_number(row["discount"] * 100, 1)}%' if pd.notna(row["strategic_price"]) else "-",
             },
             "collaborative": {
-                "strat_price": f'${format_number(row["strategic_price_col"], 0)}' if row["strategic_price_col"] is not None else "$-",
-                "discount": f'{format_number(row["discount_col"]*100, 1)}%',
+                "strat_price": f'${format_number(row["strategic_price_col"], 0)}' if pd.notna(row["strategic_price_col"]) else "$-",
+                "discount": f'{format_number(row["discount_col"] * 100, 1)}%' if pd.notna(row["strategic_price_col"]) else "-",
                 "icon": row["icon_col"]
             },
             "negotiation": {
-                "strat_price": f'${format_number(row["strategic_price_neg"], 0)}' if row["strategic_price_neg"] is not None else "$-",
-                "discount": f'{format_number(row["discount_neg"]*100, 1)}%',
+                "strat_price": f'${format_number(row["strategic_price_neg"], 0)}' if pd.notna(row["strategic_price_neg"]) else "$-",
+                "discount": f'{format_number(row["discount_neg"] * 100, 1)}%' if pd.notna(row["strategic_price_neg"]) else "-",
                 "icon": row["icon_neg"]
             },
             "execution": {
-                "strat_price": f'${format_number(row["strategic_price_eje"], 0)}' if row["strategic_price_eje"] is not None else "$-",
-                "discount": f'{format_number(row["discount_eje"]*100, 1)}%',
+                "strat_price": f'${format_number(row["strategic_price_eje"], 0)}' if pd.notna(row["strategic_price_eje"]) else "$-",
+                "discount": f'{format_number(row["discount_eje"] * 100, 1)}%' if pd.notna(row["strategic_price_eje"]) else "-",
                 "icon": row["icon_eje"]
             },
         })
@@ -1674,6 +1945,11 @@ def pull_brand_tracking_summary(offer_id):
     summary = pull_family_products_summary(df)
     return summary
 
+def merge_brand_tracking_rows(grouped_data_rows, data_rows):
+    for row in grouped_data_rows:
+        row["office_products"] = [prod for prod in data_rows if prod["product_code"] == row["product_code"]]
+    return grouped_data_rows
+
 def pull_brand_tracking(offer_id):
     query_ini = f'SELECT * FROM pb_promotion_product_historic WHERE promotionalstate_phase="INICIAL" AND promotion_id={offer_id};'
     query_col = f'SELECT * FROM pb_promotion_product_historic WHERE promotionalstate_phase="COLABORATIVA" AND promotion_id={offer_id};'
@@ -1684,7 +1960,7 @@ def pull_brand_tracking(offer_id):
     df_negociacion = pull_dataframe_from_sql(query_neg)
     df_ejecucion = pull_dataframe_from_sql(query_eje)
 
-    df_bt=df_inicial[["strategy_name", "model", "product_code", "product_description", "brand", "family", "subfamily", "short_brand", "base_price", "current_price", "optimization_price"]]
+    df_bt=df_inicial[["strategy_name", "model", "product_code", "product_description", "brand", "family", "subfamily", "short_brand", "base_price", "current_price", "optimization_price", "distributor_name"]]
 
     df_inicial = clean_brand_tracking_df(df_inicial)
     df_colaborativa = clean_brand_tracking_df(df_colaborativa)
@@ -1700,7 +1976,10 @@ def pull_brand_tracking(offer_id):
     
     df_bt_header = pull_brand_tracking_header(df_bt)
 
+    grouped_data_rows = pull_brand_tracking_grouped_data_rows(df_bt)
     data_rows = pull_brand_tracking_data_rows(df_bt)
+
+    merged_data_rows = merge_brand_tracking_rows(grouped_data_rows, data_rows)
 
     # products_json = df_bt.to_json(orient='records')
     # products_json = loads(products_json)
@@ -1713,19 +1992,7 @@ def pull_brand_tracking(offer_id):
     summary=pull_brand_tracking_summary(offer_id)
     return {
         "offer_data": pull_offer_data(offer_id),
-        "data_rows": data_rows,
+        "data_rows": merged_data_rows,
         "header": df_bt_header,
-        "summary": summary
-        # "summary": {
-        #     'strat_op_res': "$-",
-        #     'strat_ben': "$-",
-        #     'opt_op_res': "$-",
-        #     'opt_ben': "$-",
-        # }
-        # "header": {
-        #     "initial_prop": "",
-        #     "collaborative_prop": "",
-        #     "negotiation_prop": "",
-        #     "execution_prop": "",
-        # },
+        "summary": summary,
     }

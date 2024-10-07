@@ -1,7 +1,7 @@
 
 
 
-from api.controllers.traditional.simulator import offer_simulator
+from api.controllers.traditional.simulator import offer_trad_simulator
 from api.controllers.system import query_execute_w_err
 from api.controllers.utils import pull_dataframe_from_sql, upsert_massive_load
 from api.routes.utils import pull_timestamp
@@ -98,7 +98,7 @@ def bulk_update_promotion_products(file, user_id, offer_id):
 
             df['price_error']=df['prop_price'].apply(lambda x: 1 if (x < 0 or not isinstance(x, (int, float)) or x is None) else 0)
 
-            df3=df.apply(lambda x: pd.Series(offer_simulator(x['product_code'], x['customer'], x['prop_price'])), axis=1)
+            df3=df.apply(lambda x: pd.Series(offer_trad_simulator(x['product_code'], x['customer'], x['prop_price'])), axis=1)
 
             response_json = {'message': 'Archivo procesado correctamente'}
             response_json['data_rows'] = {

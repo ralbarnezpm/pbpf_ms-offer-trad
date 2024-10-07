@@ -3,7 +3,8 @@ from api.auth.authentication import verify_token_middleware
 from api.controllers.traditional.activity import pull_offer_activity, pull_promotion_activity
 from api.controllers.traditional.catalog import check_created_promotion_offices, distributors_name, pull_brands, pull_offices
 from api.controllers.traditional.massive_load import bulk_update_promotion_products, insert_massive_load_to_promotion_products
-from api.controllers.traditional.offer import check_duplicate_name, create_promotion_controller, data_create, delete_offer_product, insert_offer_product, pull_brand_tracking, pull_product_optimization_view, pull_product_view, pull_products, pull_pvp, save_offer, simulator_handler
+from api.controllers.traditional.offer import check_duplicate_name, create_promotion_controller, data_create, delete_offer_product, insert_offer_product, pull_brand_tracking, pull_product_view, pull_products, pull_pvp, save_offer, simulator_handler
+from api.controllers.traditional.offer import pull_aggregated_product_view, pull_product_view_product_info_v2
 from datetime import datetime
 from io import BytesIO
 
@@ -126,11 +127,17 @@ def pull_offer_current_products_hdlr(payload, offer_id):
     json_data_python = pull_offer_current_products(offer_id)
     return jsonify(json_data_python)
 
-@offer_bp.route("/product/<product_code>/<customer>/<offer_id>", methods=["GET"])
+
+@offer_bp.route("/product/<product_code>/<offer_id>", methods=["GET"])
 @verify_token_middleware
-def pull_product_view_(payload, product_code, customer, offer_id):
-    json_data_python = pull_product_optimization_view(product_code, customer, offer_id)
-    return jsonify(json_data_python)
+def pull_product_view_(payload, product_code, offer_id):
+    aggregated_view = pull_aggregated_product_view(product_code, offer_id) or {}
+    product_info = pull_product_view_product_info_v2(product_code, offer_id) or {}
+
+    return jsonify(
+        **aggregated_view,
+        **product_info
+    )
 
 @offer_bp.route("/save/<offer_id>", methods=["POST"])
 @verify_token_middleware
@@ -150,7 +157,8 @@ def delete_offer_product_by_id(payload, offer_product_id):
 def simulate_offer_products(payload, offer_id):
     data_rows = request.json.get("data_rows")
     offer_data = request.json.get("offer_data")
-    json_data_python = simulator_handler(offer_id, data_rows, offer_data)
+    mg_pvp = request.json.get("mg_pvp")
+    json_data_python = simulator_handler(offer_id, data_rows, offer_data, mg_pvp)
     return jsonify(json_data_python)
 
 @offer_bp.route("/listall", methods=["GET"])
